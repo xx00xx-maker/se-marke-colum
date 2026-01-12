@@ -91,6 +91,13 @@ export default function App() {
     const [isGeneratingPatterns, setIsGeneratingPatterns] = useState(false);
     const [results, setResults] = useState([]);
     const [copiedId, setCopiedId] = useState(null);
+
+    // 結果を編集する関数
+    const updateResult = (idx, field, value) => {
+        setResults(prev => prev.map((result, i) =>
+            i === idx ? { ...result, [field]: value } : result
+        ));
+    };
     const [keywordsByCategory, setKeywordsByCategory] = useState({});
     const [expandedCategories, setExpandedCategories] = useState({});
     const [displayStartIndex, setDisplayStartIndex] = useState({}); // 各カテゴリの表示開始インデックス
@@ -809,43 +816,48 @@ export default function App() {
                                             APPROACH: {pattern.approach}
                                         </p>
 
-                                        {/* タイトル */}
-                                        <h3 style={{
-                                            fontSize: '18px',
-                                            fontWeight: 500,
-                                            color: '#2C2C2C',
-                                            fontFamily: "'Noto Serif JP', serif",
-                                            marginBottom: '24px',
-                                            lineHeight: 1.5
-                                        }}>
-                                            {pattern.title}
-                                        </h3>
+                                        {/* タイトル（編集可能） */}
+                                        <input
+                                            type="text"
+                                            value={pattern.title}
+                                            onChange={(e) => updateResult(idx, 'title', e.target.value)}
+                                            style={{
+                                                width: '100%',
+                                                fontSize: '18px',
+                                                fontWeight: 500,
+                                                color: '#2C2C2C',
+                                                fontFamily: "'Noto Serif JP', serif",
+                                                marginBottom: '24px',
+                                                lineHeight: 1.5,
+                                                border: 'none',
+                                                borderBottom: '1px dashed #E0DED8',
+                                                padding: '8px 0',
+                                                backgroundColor: 'transparent',
+                                                outline: 'none'
+                                            }}
+                                        />
 
-                                        {/* 本文（左ボーダー付き） */}
-                                        <div style={{
-                                            borderLeft: '3px solid #E8E6E0',
-                                            paddingLeft: '20px',
-                                            marginBottom: '24px'
-                                        }}>
-                                            {pattern.content.split('\n\n').map((paragraph, pIdx) => (
-                                                <p
-                                                    key={pIdx}
-                                                    style={{
-                                                        fontSize: '14px',
-                                                        lineHeight: 1.9,
-                                                        color: '#3A3A3A',
-                                                        marginBottom: pIdx < pattern.content.split('\n\n').length - 1 ? '16px' : 0
-                                                    }}
-                                                >
-                                                    {paragraph.split('\n').map((line, lIdx) => (
-                                                        <span key={lIdx}>
-                                                            {line}
-                                                            {lIdx < paragraph.split('\n').length - 1 && <br />}
-                                                        </span>
-                                                    ))}
-                                                </p>
-                                            ))}
-                                        </div>
+                                        {/* 本文（編集可能） */}
+                                        <textarea
+                                            value={pattern.content}
+                                            onChange={(e) => updateResult(idx, 'content', e.target.value)}
+                                            style={{
+                                                width: '100%',
+                                                minHeight: '200px',
+                                                fontSize: '14px',
+                                                lineHeight: 1.9,
+                                                color: '#3A3A3A',
+                                                borderLeft: '3px solid #E8E6E0',
+                                                paddingLeft: '20px',
+                                                marginBottom: '24px',
+                                                border: 'none',
+                                                borderLeft: '3px solid #E8E6E0',
+                                                resize: 'vertical',
+                                                backgroundColor: 'transparent',
+                                                outline: 'none',
+                                                fontFamily: 'inherit'
+                                            }}
+                                        />
 
                                         {/* フッター: 文字数 + コピーボタン */}
                                         <div style={{
