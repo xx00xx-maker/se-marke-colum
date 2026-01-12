@@ -837,13 +837,22 @@ export default function App() {
                                             }}
                                         />
 
-                                        {/* 本文（編集可能） */}
+                                        {/* 本文（編集可能・自動高さ調整） */}
                                         <textarea
                                             value={pattern.content}
-                                            onChange={(e) => updateResult(idx, 'content', e.target.value)}
+                                            onChange={(e) => {
+                                                updateResult(idx, 'content', e.target.value);
+                                                e.target.style.height = 'auto';
+                                                e.target.style.height = e.target.scrollHeight + 'px';
+                                            }}
+                                            ref={(el) => {
+                                                if (el) {
+                                                    el.style.height = 'auto';
+                                                    el.style.height = el.scrollHeight + 'px';
+                                                }
+                                            }}
                                             style={{
                                                 width: '100%',
-                                                minHeight: '200px',
                                                 fontSize: '14px',
                                                 lineHeight: 1.9,
                                                 color: '#3A3A3A',
@@ -852,10 +861,11 @@ export default function App() {
                                                 marginBottom: '24px',
                                                 border: 'none',
                                                 borderLeft: '3px solid #E8E6E0',
-                                                resize: 'vertical',
+                                                resize: 'none',
                                                 backgroundColor: 'transparent',
                                                 outline: 'none',
-                                                fontFamily: 'inherit'
+                                                fontFamily: 'inherit',
+                                                overflow: 'hidden'
                                             }}
                                         />
 
