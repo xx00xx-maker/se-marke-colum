@@ -113,3 +113,92 @@ export async function generateSuggestionsFromAI({ methodId, templateId, mode }) 
     return data.result
 }
 
+/**
+ * knowledge_chunksテーブルからキーワードを取得
+ */
+export async function fetchKeywordsFromKnowledgeChunks(category = 'board_writing_tip') {
+    if (isDemoMode) {
+        await new Promise(resolve => setTimeout(resolve, 300))
+        return DEMO_DATA.fragments
+    }
+
+    const { data, error } = await supabase
+        .from('knowledge_chunks')
+        .select('content')
+        .eq('category', category)
+        .limit(20)
+
+    if (error) {
+        console.error('キーワード取得エラー:', error)
+        return []
+    }
+
+    return data.map(item => item.content)
+}
+
+/**
+ * knowledge_chunksテーブルから全カテゴリのキーワードを取得
+ * カテゴリ別にグループ化して返す
+ */
+export async function fetchAllKeywordsByCategory() {
+    if (isDemoMode) {
+        await new Promise(resolve => setTimeout(resolve, 300))
+        return {
+            'board_writing_tip': DEMO_DATA.fragments,
+            'sample_keywords': ['サンプル1', 'サンプル2', 'サンプル3']
+        }
+    }
+
+    const { data, error } = await supabase
+        .from('knowledge_chunks')
+        .select('category, content')
+        .order('category')
+
+    if (error) {
+        console.error('キーワード取得エラー:', error)
+        return {}
+    }
+
+    // カテゴリ別にグループ化
+    const grouped = {}
+    data.forEach(item => {
+        if (!grouped[item.category]) {
+            grouped[item.category] = []
+        }
+        grouped[item.category].push(item.content)
+    })
+
+    return grouped
+}
+
+/**
+ * 新しいEdge Function generate-content を呼び出し
+ */
+export async function generateContent({
+    styleSlug = 'pana_emotion',
+    contentType = 'board_template',
+    selectedKeywords = [],
+    userPrompt = ''
+}) {
+    if (isDemoMode) {
+        // デモモードではモックデータを返す（少し遅延を入れてローディングを見せる）
+        await new Promise(resolve => setTimeout(resolve, 2000))
+        return {
+            success: true,
+            content: DEMO_PATTERNS[0].content,
+            model: 'demo-mode',
+            appliedTip: 'なし'
+        }
+    }
+
+    const { data, error } = await supabase.functions.invoke('super-processor', {
+        body: { styleSlug, contentType, selectedKeywords, userPrompt }
+    })
+
+    if (error) {
+        throw new Error(error.message || 'コンテンツ生成に失敗しました')
+    }
+
+    return data
+}
+

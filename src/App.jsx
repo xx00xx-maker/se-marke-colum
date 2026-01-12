@@ -10,31 +10,31 @@ import {
     Send,
     Sparkles,
     RefreshCw,
-    Copy
+    Copy,
+    ChevronDown,
+    ChevronUp
 } from 'lucide-react';
-import { fetchWritingConfig, generateColumn, generateSuggestionsFromAI, isDemoMode } from './lib/supabase';
+import { fetchAllKeywordsByCategory, generateContent, isDemoMode } from './lib/supabase';
 
 // --- 定数定義 ---
-const METHODS = [
-    { id: 'teaser', name: 'じらし前戯式' },
-    { id: 'emotion', name: '感情動かし式' },
-    { id: 'mind', name: 'マインド操作式' },
-    { id: 'instant', name: '即セク式' },
-    { id: 'agitate', name: '感情煽り式' },
-];
+// styleSlugは固定で使用（テスト用）
+const STYLE_SLUG = 'pana_emotion';
 
 const TEMPLATES = {
     diary: [
-        { id: 'secret', name: '密会体験日記' },
-        { id: 'erotic', name: 'エロ体験日記' },
+        { id: 'diary_logic', name: '日記誘導基本構成(PANA)' },
     ],
     board: [
-        { id: 'solve', name: '問題解決型' },
-        { id: 'question', name: '疑問形タイトル' },
-        { id: 'seven_steps', name: '7ステップ' },
-        { id: 'impact', name: 'インパクト' },
-        { id: 'healing', name: '癒しパートナー募集' },
-        { id: 'kink', name: '性癖推し' },
+        { id: 'board_template_1', name: 'スローセックス探求' },
+        { id: 'board_template_2', name: 'セックスレス解消' },
+        { id: 'board_template_3', name: 'パートナー募集' },
+        { id: 'board_template_4', name: '味気ないセックス' },
+        { id: 'board_template_5', name: '手足わされた体験' },
+        { id: 'board_template_6', name: '専門家スローセックス' },
+        { id: 'board_template_7', name: '焦らしスローセックス' },
+        { id: 'board_template_8', name: '連続イキ' },
+        { id: 'board_template_9', name: '中イキ開発' },
+        { id: 'board_template_10', name: '中イキ・ポルチオ刺激' },
     ]
 };
 
@@ -74,18 +74,28 @@ const TypewriterText = ({ text, onComplete }) => {
     );
 };
 
+// カテゴリ名の日本語マッピング
+const CATEGORY_NAMES = {
+    'board_writing_tip': 'ライティングTips',
+    'emotion': '感情・気持ち',
+    'situation': 'シチュエーション',
+    'technique': 'テクニック',
+};
+
 // --- メインコンポーネント ---
 export default function App() {
     const [mode, setMode] = useState('diary');
-    const [selectedMethod, setSelectedMethod] = useState(METHODS[0]);
     const [selectedTemplate, setSelectedTemplate] = useState(null);
-    const [suggestions, setSuggestions] = useState([]);
-    const [keywords, setKeywords] = useState([]);
     const [selectedItems, setSelectedItems] = useState([]);
     const [isGeneratingSuggestions, setIsGeneratingSuggestions] = useState(false);
     const [isGeneratingPatterns, setIsGeneratingPatterns] = useState(false);
     const [results, setResults] = useState([]);
     const [copiedId, setCopiedId] = useState(null);
+    const [keywordsByCategory, setKeywordsByCategory] = useState({});
+    const [expandedCategories, setExpandedCategories] = useState({});
+    const [displayStartIndex, setDisplayStartIndex] = useState({}); // 各カテゴリの表示開始インデックス
+
+    const KEYWORDS_PER_PAGE = 10; // 1カテゴリあたりの表示数
 
     const toggleItem = (item) => {
         if (selectedItems.includes(item)) {
@@ -93,6 +103,55 @@ export default function App() {
         } else {
             setSelectedItems(prev => [...prev, item]);
         }
+    };
+
+    const toggleCategory = (category) => {
+        setExpandedCategories(prev => ({
+            ...prev,
+            [category]: !prev[category]
+        }));
+    };
+
+    // 次の10件を表示
+    const nextCategory = (category) => {
+        const keywords = keywordsByCategory[category] || [];
+        if (keywords.length <= KEYWORDS_PER_PAGE) return;
+
+        const currentStart = displayStartIndex[category] || 0;
+        const nextStart = (currentStart + KEYWORDS_PER_PAGE) % keywords.length;
+
+        setDisplayStartIndex(prev => ({
+            ...prev,
+            [category]: nextStart
+        }));
+    };
+
+    // 前の10件を表示
+    const prevCategory = (category) => {
+        const keywords = keywordsByCategory[category] || [];
+        if (keywords.length <= KEYWORDS_PER_PAGE) return;
+
+        const currentStart = displayStartIndex[category] || 0;
+        let prevStart = currentStart - KEYWORDS_PER_PAGE;
+        if (prevStart < 0) prevStart = keywords.length + prevStart;
+
+        setDisplayStartIndex(prev => ({
+            ...prev,
+            [category]: prevStart
+        }));
+    };
+
+    // カテゴリの表示用キーワードを取得（10個）
+    const getDisplayKeywords = (category) => {
+        const keywords = keywordsByCategory[category] || [];
+        if (keywords.length <= KEYWORDS_PER_PAGE) return keywords;
+
+        const start = displayStartIndex[category] || 0;
+        const result = [];
+        for (let i = 0; i < KEYWORDS_PER_PAGE; i++) {
+            result.push(keywords[(start + i) % keywords.length]);
+        }
+        return result;
     };
 
     const copyToClipboard = async (text, id) => {
@@ -112,50 +171,86 @@ export default function App() {
         }
     };
 
-    const generateSuggestions = async (targetTemplate) => {
-        const tpl = targetTemplate || selectedTemplate;
-        if (!tpl) return;
-
+    // knowledge_chunksからカテゴリ別キーワードを取得
+    const loadKeywords = async () => {
         setIsGeneratingSuggestions(true);
-        setSuggestions([]);
-        setKeywords([]);
+        setKeywordsByCategory({});
 
         try {
-            const config = await fetchWritingConfig(selectedMethod.id, tpl.id);
-
-            if (config && config.themes?.length > 0 && config.fragments?.length > 0) {
-                setSuggestions(config.themes);
-                setKeywords(config.fragments);
-            } else {
-                const result = await generateSuggestionsFromAI({
-                    methodId: selectedMethod.id,
-                    templateId: tpl.id,
-                    mode
-                });
-                setSuggestions(result.themes || []);
-                setKeywords(result.fragments || []);
-            }
+            const fetched = await fetchAllKeywordsByCategory();
+            setKeywordsByCategory(fetched);
+            // 全カテゴリを最初は開いた状態にする
+            const expanded = {};
+            Object.keys(fetched).forEach(cat => {
+                expanded[cat] = true;
+            });
+            setExpandedCategories(expanded);
         } catch (err) {
-            console.error('提案取得エラー:', err);
+            console.error('キーワード取得エラー:', err);
         } finally {
             setIsGeneratingSuggestions(false);
         }
     };
 
-    const generateThreePatterns = async () => {
+    // テンプレート選択時にキーワードを読み込み
+    const handleTemplateSelect = async (tpl) => {
+        setSelectedTemplate(tpl);
+        setSelectedItems([]);
+        await loadKeywords();
+    };
+
+    // コンテンツ生成
+    const generateContentHandler = async () => {
         if (selectedItems.length === 0 || !selectedTemplate) return;
         setIsGeneratingPatterns(true);
         setResults([]);
 
         try {
-            const result = await generateColumn({
-                methodId: selectedMethod.id,
-                templateId: selectedTemplate.id,
-                selectedItems,
-                mode
+            // contentType を決定
+            const contentType = mode === 'diary' ? 'diary_logic' : 'board_template';
+
+            const result = await generateContent({
+                styleSlug: STYLE_SLUG,
+                contentType,
+                selectedKeywords: selectedItems,
+                userPrompt: ''
             });
 
-            setResults(result.patterns || []);
+            // レスポンスを結果配列に変換
+            if (result && result.content) {
+                // パターンを分割（---パターンN---で区切る）
+                const patternTexts = result.content
+                    .split(/---パターン\d+---/)
+                    .filter(p => p.trim().length > 0)
+                    .map(p => p.trim());
+
+                // パターンがなければ全体を1つのパターンとして扱う
+                const patterns = patternTexts.length > 0 ? patternTexts : [result.content];
+
+                // 各パターンをタイトルと本文に分割
+                const parsedResults = patterns.map((text, idx) => {
+                    // タイトル行を検出
+                    const titleMatch = text.match(/^タイトル[:：]\s*(.+)/m);
+                    const title = titleMatch ? titleMatch[1].trim() : `パターン ${idx + 1}`;
+
+                    // タイトル行を除いた本文
+                    let body = text;
+                    if (titleMatch) {
+                        body = text.replace(/^タイトル[:：]\s*.+\n?/m, '').trim();
+                    }
+
+                    return {
+                        approach: 'じらし前戯式',
+                        title: title,
+                        content: body,
+                        model: result.model,
+                        appliedTip: result.appliedTip
+                    };
+                });
+
+                setResults(parsedResults);
+            }
+
             setTimeout(() => {
                 document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth' });
             }, 300);
@@ -168,11 +263,11 @@ export default function App() {
 
     useEffect(() => {
         setSelectedTemplate(null);
-        setSuggestions([]);
-        setKeywords([]);
+        setKeywordsByCategory({});
+        setExpandedCategories({});
         setResults([]);
         setSelectedItems([]);
-    }, [mode, selectedMethod]);
+    }, [mode]);
 
     return (
         <div style={{ display: 'flex', minHeight: '100vh', backgroundColor: '#FAFAF8' }}>
@@ -189,7 +284,7 @@ export default function App() {
                     alignItems: 'center',
                     justifyContent: 'center'
                 }}>
-                    <div style={{ position: 'relative', marginBottom: '40px' }}>
+                    <div className="animate-pulse-grow" style={{ position: 'relative', marginBottom: '40px' }}>
                         <div style={{
                             width: '120px',
                             height: '120px',
@@ -202,17 +297,24 @@ export default function App() {
                         }}>
                             <div className="animate-breathe" style={{
                                 position: 'absolute',
-                                inset: '-8px',
+                                inset: '-12px',
                                 borderRadius: '50%',
-                                border: '1px solid #D0CEC8'
+                                border: '2px solid #C5C3BD'
                             }} />
-                            <Leaf style={{ width: '32px', height: '32px', color: '#8A9A8A' }} />
+                            <div className="animate-breathe" style={{
+                                position: 'absolute',
+                                inset: '-24px',
+                                borderRadius: '50%',
+                                border: '1px solid #D8D6D0',
+                                animationDelay: '0.5s'
+                            }} />
+                            <Leaf className="animate-float" style={{ width: '36px', height: '36px', color: '#6B7C6B' }} />
                         </div>
                     </div>
-                    <p style={{
-                        fontSize: '20px',
+                    <p className="animate-pulse" style={{
+                        fontSize: '22px',
                         letterSpacing: '0.3em',
-                        color: '#6B6B6B',
+                        color: '#5A5A5A',
                         marginBottom: '12px',
                         fontFamily: "'Noto Serif JP', serif"
                     }}>
@@ -255,44 +357,37 @@ export default function App() {
                         fontWeight: 500,
                         letterSpacing: '0.05em'
                     }}>
-                        心理技術
+                        スタイル
                     </p>
-                    {METHODS.map((method) => (
-                        <button
-                            key={method.id}
-                            onClick={() => setSelectedMethod(method)}
-                            style={{
-                                width: '100%',
-                                textAlign: 'left',
-                                padding: '14px 16px',
-                                borderRadius: '8px',
-                                border: 'none',
-                                backgroundColor: selectedMethod.id === method.id ? '#FFFFFF' : 'transparent',
-                                cursor: 'pointer',
-                                position: 'relative',
-                                fontSize: '14px',
-                                color: selectedMethod.id === method.id ? '#2C2C2C' : '#5C5C5C',
-                                fontWeight: selectedMethod.id === method.id ? 500 : 400,
-                                transition: 'all 0.2s',
-                                marginBottom: '4px',
-                                boxShadow: selectedMethod.id === method.id ? '0 1px 3px rgba(0,0,0,0.05)' : 'none'
-                            }}
-                        >
-                            {selectedMethod.id === method.id && (
-                                <div style={{
-                                    position: 'absolute',
-                                    left: 0,
-                                    top: '50%',
-                                    transform: 'translateY(-50%)',
-                                    width: '3px',
-                                    height: '20px',
-                                    backgroundColor: '#6B7C6B',
-                                    borderRadius: '0 2px 2px 0'
-                                }} />
-                            )}
-                            {method.name}
-                        </button>
-                    ))}
+                    <div style={{
+                        padding: '14px 16px',
+                        borderRadius: '8px',
+                        backgroundColor: '#FFFFFF',
+                        fontSize: '14px',
+                        color: '#2C2C2C',
+                        fontWeight: 500,
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+                        position: 'relative'
+                    }}>
+                        <div style={{
+                            position: 'absolute',
+                            left: 0,
+                            top: '50%',
+                            transform: 'translateY(-50%)',
+                            width: '3px',
+                            height: '20px',
+                            backgroundColor: '#6B7C6B',
+                            borderRadius: '0 2px 2px 0'
+                        }} />
+                        じらし前戯式
+                    </div>
+                    <p style={{
+                        padding: '16px 16px 8px',
+                        fontSize: '10px',
+                        color: '#AAAAAA',
+                    }}>
+                        ※ テスト用に固定
+                    </p>
                 </nav>
             </aside>
 
@@ -382,7 +477,7 @@ export default function App() {
                             {TEMPLATES[mode].map((tpl) => (
                                 <button
                                     key={tpl.id}
-                                    onClick={() => { setSelectedTemplate(tpl); generateSuggestions(tpl); }}
+                                    onClick={() => handleTemplateSelect(tpl)}
                                     style={{
                                         padding: '16px 32px',
                                         border: selectedTemplate?.id === tpl.id ? '2px solid #2C2C2C' : '1px solid #E0DED8',
@@ -425,7 +520,7 @@ export default function App() {
                                 </h2>
                             </div>
                             <button
-                                onClick={() => generateSuggestions()}
+                                onClick={loadKeywords}
                                 disabled={isGeneratingSuggestions}
                                 style={{
                                     display: 'flex',
@@ -440,12 +535,13 @@ export default function App() {
                                     fontWeight: 500
                                 }}
                             >
-                                再提案
+                                再読み込み
                                 <RefreshCw size={14} className={isGeneratingSuggestions ? 'animate-spin' : ''} />
                             </button>
                         </div>
 
-                        {/* 言葉の種 */}
+
+                        {/* カテゴリ別キーワード選択 */}
                         <div style={{ marginBottom: '24px' }}>
                             <p style={{
                                 fontSize: '12px',
@@ -456,99 +552,196 @@ export default function App() {
                                 gap: '6px'
                             }}>
                                 <Sparkles size={12} />
-                                言葉の種
+                                カテゴリからキーワードを選択
                             </p>
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                                {isGeneratingSuggestions ? (
-                                    Array(5).fill(0).map((_, i) => (
-                                        <div key={i} style={{
-                                            height: '36px',
-                                            width: '180px',
-                                            backgroundColor: '#F0EEE8',
-                                            borderRadius: '18px'
-                                        }} className="animate-pulse" />
-                                    ))
-                                ) : (
-                                    suggestions.map((theme, i) => (
-                                        <button
-                                            key={i}
-                                            onClick={() => toggleItem(theme)}
-                                            style={{
-                                                padding: '8px 16px',
-                                                border: selectedItems.includes(theme) ? '1px solid #2C2C2C' : '1px solid #E0DED8',
-                                                borderRadius: '18px',
-                                                backgroundColor: selectedItems.includes(theme) ? '#2C2C2C' : '#FFFFFF',
-                                                color: selectedItems.includes(theme) ? '#FFFFFF' : '#4A4A4A',
-                                                fontSize: '13px',
-                                                cursor: 'pointer',
-                                                transition: 'all 0.2s'
-                                            }}
-                                        >
-                                            {theme}
-                                        </button>
-                                    ))
-                                )}
-                            </div>
-                        </div>
 
-                        {/* 感性の断片 */}
-                        <div style={{ marginBottom: '24px' }}>
-                            <p style={{
-                                fontSize: '12px',
-                                color: '#8A8A8A',
-                                marginBottom: '12px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '6px'
-                            }}>
-                                <Wind size={12} />
-                                感性の断片
-                            </p>
-                            <div style={{
-                                padding: '20px',
-                                backgroundColor: '#F8F7F4',
-                                borderRadius: '12px',
-                                border: '1px solid #E8E6E0'
-                            }}>
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                                    {isGeneratingSuggestions ? (
-                                        Array(10).fill(0).map((_, i) => (
+                            {isGeneratingSuggestions ? (
+                                <div style={{
+                                    padding: '20px',
+                                    backgroundColor: '#F8F7F4',
+                                    borderRadius: '12px',
+                                    border: '1px solid #E8E6E0'
+                                }}>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                                        {Array(10).fill(0).map((_, i) => (
                                             <div key={i} style={{
                                                 height: '36px',
-                                                width: '70px',
+                                                width: '100px',
                                                 backgroundColor: '#FFFFFF',
                                                 borderRadius: '6px'
                                             }} className="animate-pulse" />
-                                        ))
-                                    ) : (
-                                        keywords.map((fragment, i) => (
+                                        ))}
+                                    </div>
+                                </div>
+                            ) : Object.keys(keywordsByCategory).length === 0 ? (
+                                <div style={{
+                                    padding: '40px 20px',
+                                    backgroundColor: '#F8F7F4',
+                                    borderRadius: '12px',
+                                    border: '1px solid #E8E6E0',
+                                    textAlign: 'center',
+                                    color: '#9A9A9A',
+                                    fontSize: '14px'
+                                }}>
+                                    テンプレートを選択するとキーワードが表示されます
+                                </div>
+                            ) : (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                    {Object.entries(keywordsByCategory).map(([category, allKeywords]) => (
+                                        <div key={category} style={{
+                                            backgroundColor: '#F8F7F4',
+                                            borderRadius: '12px',
+                                            border: '1px solid #E8E6E0',
+                                            overflow: 'hidden'
+                                        }}>
+                                            {/* カテゴリヘッダー */}
                                             <button
-                                                key={i}
-                                                onClick={() => toggleItem(fragment)}
+                                                onClick={() => toggleCategory(category)}
                                                 style={{
-                                                    padding: '8px 16px',
-                                                    border: selectedItems.includes(fragment) ? '1px solid #2C2C2C' : '1px solid #E0DED8',
-                                                    borderRadius: '6px',
-                                                    backgroundColor: selectedItems.includes(fragment) ? '#2C2C2C' : '#FFFFFF',
-                                                    color: selectedItems.includes(fragment) ? '#FFFFFF' : '#4A4A4A',
-                                                    fontSize: '13px',
+                                                    width: '100%',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'space-between',
+                                                    padding: '14px 16px',
+                                                    backgroundColor: 'transparent',
+                                                    border: 'none',
                                                     cursor: 'pointer',
-                                                    transition: 'all 0.2s'
+                                                    fontSize: '13px',
+                                                    fontWeight: 500,
+                                                    color: '#4A4A4A',
+                                                    textAlign: 'left'
                                                 }}
                                             >
-                                                {fragment}
+                                                <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                    <Layers size={14} style={{ color: '#6B7C6B' }} />
+                                                    {CATEGORY_NAMES[category] || category}
+                                                </span>
+                                                {expandedCategories[category] ? (
+                                                    <ChevronUp size={16} style={{ color: '#8A8A8A' }} />
+                                                ) : (
+                                                    <ChevronDown size={16} style={{ color: '#8A8A8A' }} />
+                                                )}
                                             </button>
-                                        ))
-                                    )}
+
+                                            {/* キーワード一覧 */}
+                                            {expandedCategories[category] && (
+                                                <div style={{ padding: '0 16px 16px' }}>
+                                                    <div style={{
+                                                        display: 'flex',
+                                                        flexWrap: 'wrap',
+                                                        gap: '8px',
+                                                        marginBottom: allKeywords.length > KEYWORDS_PER_PAGE ? '12px' : '0'
+                                                    }}>
+                                                        {getDisplayKeywords(category).map((keyword, i) => (
+                                                            <button
+                                                                key={`${category}-${i}-${keyword}`}
+                                                                onClick={() => toggleItem(keyword)}
+                                                                style={{
+                                                                    padding: '8px 16px',
+                                                                    border: selectedItems.includes(keyword) ? '1px solid #2C2C2C' : '1px solid #E0DED8',
+                                                                    borderRadius: '6px',
+                                                                    backgroundColor: selectedItems.includes(keyword) ? '#2C2C2C' : '#FFFFFF',
+                                                                    color: selectedItems.includes(keyword) ? '#FFFFFF' : '#4A4A4A',
+                                                                    fontSize: '13px',
+                                                                    cursor: 'pointer',
+                                                                    transition: 'all 0.2s'
+                                                                }}
+                                                            >
+                                                                {keyword}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                    {/* ナビゲーションボタン */}
+                                                    {allKeywords.length > KEYWORDS_PER_PAGE && (
+                                                        <div style={{ display: 'flex', gap: '8px' }}>
+                                                            {(displayStartIndex[category] || 0) > 0 && (
+                                                                <button
+                                                                    onClick={() => prevCategory(category)}
+                                                                    style={{
+                                                                        display: 'flex',
+                                                                        alignItems: 'center',
+                                                                        gap: '6px',
+                                                                        padding: '6px 12px',
+                                                                        border: '1px dashed #C5C3BD',
+                                                                        borderRadius: '6px',
+                                                                        backgroundColor: 'transparent',
+                                                                        color: '#6B7C6B',
+                                                                        fontSize: '12px',
+                                                                        cursor: 'pointer',
+                                                                        transition: 'all 0.2s'
+                                                                    }}
+                                                                >
+                                                                    <ChevronUp size={12} />
+                                                                    前の10件
+                                                                </button>
+                                                            )}
+                                                            <button
+                                                                onClick={() => nextCategory(category)}
+                                                                style={{
+                                                                    display: 'flex',
+                                                                    alignItems: 'center',
+                                                                    gap: '6px',
+                                                                    padding: '6px 12px',
+                                                                    border: '1px dashed #C5C3BD',
+                                                                    borderRadius: '6px',
+                                                                    backgroundColor: 'transparent',
+                                                                    color: '#6B7C6B',
+                                                                    fontSize: '12px',
+                                                                    cursor: 'pointer',
+                                                                    transition: 'all 0.2s'
+                                                                }}
+                                                            >
+                                                                次の10件
+                                                                <ChevronDown size={12} />
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
                                 </div>
-                            </div>
+                            )}
+
+                            {/* 選択中のキーワード表示 */}
+                            {selectedItems.length > 0 && (
+                                <div style={{
+                                    marginTop: '16px',
+                                    padding: '12px 16px',
+                                    backgroundColor: '#FFFFFF',
+                                    borderRadius: '8px',
+                                    border: '1px solid #6B7C6B',
+                                }}>
+                                    <p style={{
+                                        fontSize: '11px',
+                                        color: '#6B7C6B',
+                                        marginBottom: '8px',
+                                        fontWeight: 500
+                                    }}>
+                                        選択中: {selectedItems.length}個
+                                    </p>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                        {selectedItems.map((item, i) => (
+                                            <span key={i} style={{
+                                                padding: '4px 10px',
+                                                backgroundColor: '#2C2C2C',
+                                                color: '#FFFFFF',
+                                                borderRadius: '4px',
+                                                fontSize: '12px'
+                                            }}>
+                                                {item}
+                                            </span>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
                         </div>
 
                         {/* 生成ボタン */}
 
                         <div style={{ display: 'flex', justifyContent: 'center', paddingTop: '16px' }}>
                             <button
-                                onClick={generateThreePatterns}
+                                onClick={generateContentHandler}
                                 disabled={selectedItems.length === 0 || isGeneratingPatterns}
                                 style={{
                                     display: 'flex',
@@ -566,7 +759,7 @@ export default function App() {
                                     letterSpacing: '0.1em'
                                 }}
                             >
-                                3パターン生成する
+                                コンテンツを生成する
                                 <Send size={18} />
                             </button>
                         </div>
@@ -605,45 +798,68 @@ export default function App() {
                                             animationDelay: `${idx * 0.1}s`
                                         }}
                                     >
-                                        <div style={{ marginBottom: '16px' }}>
-                                            <p style={{
-                                                fontSize: '12px',
-                                                color: '#8A8A8A',
-                                                marginBottom: '8px',
-                                                letterSpacing: '0.1em'
-                                            }}>
-                                                APPROACH: {selectedMethod.name}
-                                            </p>
-                                            <h3 style={{
-                                                fontSize: '18px',
-                                                fontWeight: 500,
-                                                color: '#2C2C2C',
-                                                fontFamily: "'Noto Serif JP', serif"
-                                            }}>
-                                                {pattern.titles?.[0] || pattern.approach}
-                                            </h3>
-                                        </div>
-
-                                        <div style={{
-                                            borderTop: '1px solid #F0EEE8',
-                                            paddingTop: '24px'
+                                        {/* APPROACH ラベル */}
+                                        <p style={{
+                                            fontSize: '12px',
+                                            color: '#9A9A9A',
+                                            marginBottom: '8px',
+                                            letterSpacing: '0.15em',
+                                            fontWeight: 500
                                         }}>
-                                            <TypewriterText text={pattern.content} />
+                                            APPROACH: {pattern.approach}
+                                        </p>
+
+                                        {/* タイトル */}
+                                        <h3 style={{
+                                            fontSize: '18px',
+                                            fontWeight: 500,
+                                            color: '#2C2C2C',
+                                            fontFamily: "'Noto Serif JP', serif",
+                                            marginBottom: '24px',
+                                            lineHeight: 1.5
+                                        }}>
+                                            {pattern.title}
+                                        </h3>
+
+                                        {/* 本文（左ボーダー付き） */}
+                                        <div style={{
+                                            borderLeft: '3px solid #E8E6E0',
+                                            paddingLeft: '20px',
+                                            marginBottom: '24px'
+                                        }}>
+                                            {pattern.content.split('\n\n').map((paragraph, pIdx) => (
+                                                <p
+                                                    key={pIdx}
+                                                    style={{
+                                                        fontSize: '14px',
+                                                        lineHeight: 1.9,
+                                                        color: '#3A3A3A',
+                                                        marginBottom: pIdx < pattern.content.split('\n\n').length - 1 ? '16px' : 0
+                                                    }}
+                                                >
+                                                    {paragraph.split('\n').map((line, lIdx) => (
+                                                        <span key={lIdx}>
+                                                            {line}
+                                                            {lIdx < paragraph.split('\n').length - 1 && <br />}
+                                                        </span>
+                                                    ))}
+                                                </p>
+                                            ))}
                                         </div>
 
+                                        {/* フッター: 文字数 + コピーボタン */}
                                         <div style={{
                                             display: 'flex',
                                             justifyContent: 'space-between',
                                             alignItems: 'center',
-                                            marginTop: '24px',
                                             paddingTop: '16px',
                                             borderTop: '1px solid #F0EEE8'
                                         }}>
                                             <span style={{ fontSize: '12px', color: '#9A9A9A' }}>
-                                                {pattern.content.length} 文字
+                                                文字数: {pattern.content.length} 字
                                             </span>
                                             <button
-                                                onClick={() => copyToClipboard(pattern.content, idx)}
+                                                onClick={() => copyToClipboard(`${pattern.title}\n\n${pattern.content}`, idx)}
                                                 style={{
                                                     display: 'flex',
                                                     alignItems: 'center',
@@ -666,7 +882,7 @@ export default function App() {
                                                 ) : (
                                                     <>
                                                         <Copy size={14} />
-                                                        コピー
+                                                        コピーする
                                                     </>
                                                 )}
                                             </button>
