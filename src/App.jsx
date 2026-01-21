@@ -22,19 +22,12 @@ const STYLE_SLUG = 'pana_emotion';
 
 const TEMPLATES = {
     diary: [
-        { id: 'diary_logic', name: '日記誘導基本構成(PANA)' },
+        { id: 'diary_logic', name: '基本誘導型' },
     ],
     board: [
-        { id: 'board_template_1', name: 'スローセックス探求' },
-        { id: 'board_template_2', name: 'セックスレス解消' },
-        { id: 'board_template_3', name: 'パートナー募集' },
-        { id: 'board_template_4', name: '味気ないセックス' },
-        { id: 'board_template_5', name: '手足わされた体験' },
-        { id: 'board_template_6', name: '専門家スローセックス' },
-        { id: 'board_template_7', name: '焦らしスローセックス' },
-        { id: 'board_template_8', name: '連続イキ' },
-        { id: 'board_template_9', name: '中イキ開発' },
-        { id: 'board_template_10', name: '中イキ・ポルチオ刺激' },
+        { id: 'board_concept_1', name: '基本募集・探求型', description: 'スローセックスの全体像を紹介し、講座修了と基本流れを強調' },
+        { id: 'board_concept_2', name: '悩み解消・共感型', description: 'セックスレスの痛みに共感し、自己経験を共有' },
+        { id: 'board_concept_3', name: 'イキ開発・テクニック特化型', description: '連続イキ・中イキ・ポルチオのテクニックを解説' },
     ]
 };
 
@@ -216,9 +209,16 @@ export default function App() {
             // contentType を決定
             const contentType = mode === 'diary' ? 'diary_logic' : 'board_template';
 
+            // 掲示板モードの場合、コンセプトIDを抽出（例: board_concept_1 → 1）
+            let conceptId = null;
+            if (mode === 'board' && selectedTemplate?.id?.startsWith('board_concept_')) {
+                conceptId = selectedTemplate.id.replace('board_concept_', '');
+            }
+
             const result = await generateContent({
                 styleSlug: STYLE_SLUG,
                 contentType,
+                conceptId,
                 selectedKeywords: selectedItems,
                 userPrompt: ''
             });
@@ -245,6 +245,14 @@ export default function App() {
                     if (titleMatch) {
                         body = text.replace(/^タイトル[:：]\s*.+\n?/m, '').trim();
                     }
+                    // 本文内の文字数表記を除去（例: (文字数: 428)、（文字数：500）、(428文字)、(合計文字数: 428) など）
+                    body = body.replace(/[（(]文字数[:：]\s*\d+[）)]/g, '').trim();
+                    body = body.replace(/[（(]\d+文字[）)]/g, '').trim();
+                    body = body.replace(/[（(]合計文字数[:：]\s*\d+[）)]/g, '').trim();
+                    // メールアドレス行を除去
+                    body = body.replace(/^.*メール[:：].*@.*$/gm, '').trim();
+                    // 連続する空行を1つに
+                    body = body.replace(/\n{3,}/g, '\n\n').trim();
 
                     return {
                         approach: 'じらし前戯式',
@@ -328,7 +336,7 @@ export default function App() {
                         言葉を紡いでいます...
                     </p>
                     <p style={{ fontSize: '12px', color: '#9A9A9A', letterSpacing: '0.1em' }}>
-                        禅の静寂の中で、想いを形にしています
+                        あなたの想いを形にしています
                     </p>
                 </div>
             )}
@@ -388,13 +396,6 @@ export default function App() {
                         }} />
                         じらし前戯式
                     </div>
-                    <p style={{
-                        padding: '16px 16px 8px',
-                        fontSize: '10px',
-                        color: '#AAAAAA',
-                    }}>
-                        ※ テスト用に固定
-                    </p>
                 </nav>
             </aside>
 
@@ -878,7 +879,7 @@ export default function App() {
                                             borderTop: '1px solid #F0EEE8'
                                         }}>
                                             <span style={{ fontSize: '12px', color: '#9A9A9A' }}>
-                                                文字数: {pattern.content.length} 字
+                                                文字数: {pattern.content.replace(/[\s\n]/g, '').length} 字
                                             </span>
                                             <button
                                                 onClick={() => copyToClipboard(`${pattern.title}\n\n${pattern.content}`, idx)}

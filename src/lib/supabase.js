@@ -177,6 +177,7 @@ export async function fetchAllKeywordsByCategory() {
 export async function generateContent({
     styleSlug = 'pana_emotion',
     contentType = 'board_template',
+    conceptId = null,
     selectedKeywords = [],
     userPrompt = ''
 }) {
@@ -192,7 +193,7 @@ export async function generateContent({
     }
 
     const { data, error } = await supabase.functions.invoke('super-processor', {
-        body: { styleSlug, contentType, selectedKeywords, userPrompt }
+        body: { styleSlug, contentType, conceptId, selectedKeywords, userPrompt }
     })
 
     if (error) {
