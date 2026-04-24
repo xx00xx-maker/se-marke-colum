@@ -14,7 +14,7 @@ import {
     ChevronDown,
     ChevronUp
 } from 'lucide-react';
-import { fetchAllKeywordsByCategory, generateContent, isDemoMode } from './lib/supabase';
+import { fetchAllKeywordsByCategory, generateContentStreaming, isDemoMode } from './lib/supabase';
 
 // --- 定数定義 ---
 // styleSlugは固定で使用（テスト用）
@@ -27,7 +27,8 @@ const TEMPLATES = {
     board: [
         { id: 'board_concept_1', name: '基本募集・探求型', description: 'スローセックスの全体像を紹介し、講座修了と基本流れを強調' },
         { id: 'board_concept_2', name: '悩み解消・共感型', description: 'セックスレスの痛みに共感し、自己経験を共有' },
-        { id: 'board_concept_3', name: 'イキ開発・テクニック特化型', description: '連続イキ・中イキ・ポルチオのテクニックを解説' },
+        { id: 'board_concept_3', name: 'テクニック特化型', description: 'クンニ・中イキ・Gスポット等テクニックを具体的にアピール' },
+        { id: 'board_concept_4', name: 'プレイ特化型', description: '痴漢・露出・おもちゃ等、非日常プレイへの願望に応える' },
     ]
 };
 
@@ -82,8 +83,20 @@ export default function App() {
     const [selectedItems, setSelectedItems] = useState([]);
     const [isGeneratingSuggestions, setIsGeneratingSuggestions] = useState(false);
     const [isGeneratingPatterns, setIsGeneratingPatterns] = useState(false);
+    const [showOverlay, setShowOverlay] = useState(false);
+    const [overlayFadingOut, setOverlayFadingOut] = useState(false);
     const [results, setResults] = useState([]);
+    const [streamingParagraphs, setStreamingParagraphs] = useState([]);
+    const [generationError, setGenerationError] = useState(null);
     const [copiedId, setCopiedId] = useState(null);
+
+    const STAGGER_MS = 900;
+    const streamBufferRef = useRef('');
+    const streamDoneRef = useRef(false);
+    const postOverlayRef = useRef(false);
+    const displayedLineCountRef = useRef(0);
+    const lineQueueRef = useRef([]);
+    const dispatchTimerRef = useRef(null);
 
     // 結果を編集する関数
     const updateResult = (idx, field, value) => {
@@ -199,82 +212,158 @@ export default function App() {
         await loadKeywords();
     };
 
+    // パターンテキストをパース
+    const parsePatterns = (fullContent) => {
+        const patternTexts = fullContent
+            .split(/---パターン\d+---/)
+            .filter(p => p.trim().length > 0)
+            .map(p => p.trim());
+
+        const patterns = patternTexts.length > 0 ? patternTexts : [fullContent];
+
+        return patterns.map((text, idx) => {
+            const titleMatch = text.match(/^タイトル[:：]\s*(.+)/m);
+            const title = titleMatch ? titleMatch[1].trim() : `パターン ${idx + 1}`;
+            let body = text;
+            if (titleMatch) {
+                body = text.replace(/^タイトル[:：]\s*.+\n?/m, '').trim();
+            }
+            body = body.replace(/[（(]文字数[:：]\s*\d+[）)]/g, '').trim();
+            body = body.replace(/[（(]\d+文字[）)]/g, '').trim();
+            body = body.replace(/[（(]合計文字数[:：]\s*\d+[）)]/g, '').trim();
+            body = body.replace(/^.*メール[:：].*@.*$/gm, '').trim();
+            body = body.replace(/\n{3,}/g, '\n\n').trim();
+            return { approach: 'じらし前戯式', title, content: body };
+        });
+    };
+
     // コンテンツ生成
+    const MIN_OVERLAY_MS = 10000;
+
     const generateContentHandler = async () => {
         if (selectedItems.length === 0 || !selectedTemplate) return;
+
+        streamBufferRef.current = '';
+        streamDoneRef.current = false;
+        postOverlayRef.current = false;
+        displayedLineCountRef.current = 0;
+        lineQueueRef.current = [];
+        if (dispatchTimerRef.current) clearInterval(dispatchTimerRef.current);
+
         setIsGeneratingPatterns(true);
+        setShowOverlay(true);
+        setOverlayFadingOut(false);
         setResults([]);
+        setStreamingParagraphs([]);
+        setGenerationError(null);
+
+        const startTime = Date.now();
 
         try {
-            // contentType を決定
             const contentType = mode === 'diary' ? 'diary_logic' : 'board_template';
-
-            // 掲示板モードの場合、コンセプトIDを抽出（例: board_concept_1 → 1）
             let conceptId = null;
             if (mode === 'board' && selectedTemplate?.id?.startsWith('board_concept_')) {
                 conceptId = selectedTemplate.id.replace('board_concept_', '');
             }
 
-            const result = await generateContent({
+            // ストリーミング開始（awaitしない — オーバーレイと並行して実行）
+            const streamPromise = generateContentStreaming({
                 styleSlug: STYLE_SLUG,
                 contentType,
                 conceptId,
                 selectedKeywords: selectedItems,
-                userPrompt: ''
+                userPrompt: '',
+                onChunk: (accumulated) => {
+                    streamBufferRef.current = accumulated;
+                    if (!postOverlayRef.current) return;
+                    // オーバーレイ解除後: 完了した行をキューへ追加
+                    const parts = accumulated.split('\n');
+                    const completedLines = parts.slice(0, -1).filter(l => l.trim() !== '');
+                    if (completedLines.length > displayedLineCountRef.current) {
+                        const newLines = completedLines.slice(displayedLineCountRef.current);
+                        lineQueueRef.current.push(...newLines);
+                        displayedLineCountRef.current = completedLines.length;
+                    }
+                },
             });
 
-            // レスポンスを結果配列に変換
-            if (result && result.content) {
-                // パターンを分割（---パターンN---で区切る）
-                const patternTexts = result.content
-                    .split(/---パターン\d+---/)
-                    .filter(p => p.trim().length > 0)
-                    .map(p => p.trim());
+            // 5秒オーバーレイ待機
+            const elapsed = Date.now() - startTime;
+            await new Promise(r => setTimeout(r, Math.max(0, MIN_OVERLAY_MS - elapsed)));
 
-                // パターンがなければ全体を1つのパターンとして扱う
-                const patterns = patternTexts.length > 0 ? patternTexts : [result.content];
+            // フェードアウト
+            setOverlayFadingOut(true);
+            await new Promise(r => setTimeout(r, 800));
+            setShowOverlay(false);
+            setOverlayFadingOut(false);
+            setIsGeneratingPatterns(false);
 
-                // 各パターンをタイトルと本文に分割
-                const parsedResults = patterns.map((text, idx) => {
-                    // タイトル行を検出
-                    const titleMatch = text.match(/^タイトル[:：]\s*(.+)/m);
-                    const title = titleMatch ? titleMatch[1].trim() : `パターン ${idx + 1}`;
+            // オーバーレイ解除 — 以降のonChunkはキューへ流す
+            postOverlayRef.current = true;
 
-                    // タイトル行を除いた本文
-                    let body = text;
-                    if (titleMatch) {
-                        body = text.replace(/^タイトル[:：]\s*.+\n?/m, '').trim();
-                    }
-                    // 本文内の文字数表記を除去（例: (文字数: 428)、（文字数：500）、(428文字)、(合計文字数: 428) など）
-                    body = body.replace(/[（(]文字数[:：]\s*\d+[）)]/g, '').trim();
-                    body = body.replace(/[（(]\d+文字[）)]/g, '').trim();
-                    body = body.replace(/[（(]合計文字数[:：]\s*\d+[）)]/g, '').trim();
-                    // メールアドレス行を除去
-                    body = body.replace(/^.*メール[:：].*@.*$/gm, '').trim();
-                    // 連続する空行を1つに
-                    body = body.replace(/\n{3,}/g, '\n\n').trim();
+            // オーバーレイ中に溜まっていた行をキューへフラッシュ
+            const existingParts = streamBufferRef.current.split('\n');
+            const existingLines = existingParts.slice(0, -1).filter(l => l.trim() !== '');
+            lineQueueRef.current.push(...existingLines);
+            displayedLineCountRef.current = existingLines.length;
 
-                    return {
-                        approach: 'じらし前戯式',
-                        title: title,
-                        content: body,
-                        model: result.model,
-                        appliedTip: result.appliedTip
-                    };
-                });
+            // セクションへスクロール
+            setTimeout(() => {
+                document.getElementById('streaming-section')?.scrollIntoView({ behavior: 'smooth' });
+            }, 100);
 
-                setResults(parsedResults);
+            // ディスパッチタイマー: STAGGER_MSごとに1行ずつ表示（遷移ロジックなし）
+            dispatchTimerRef.current = setInterval(() => {
+                if (lineQueueRef.current.length > 0) {
+                    const next = lineQueueRef.current.shift();
+                    setStreamingParagraphs(prev => [...prev, next]);
+                }
+            }, STAGGER_MS);
+
+            // ストリーム完了を待つ
+            const fullContent = await streamPromise;
+            streamBufferRef.current = fullContent;
+
+            // ディスパッチタイマー停止
+            if (dispatchTimerRef.current) {
+                clearInterval(dispatchTimerRef.current);
+                dispatchTimerRef.current = null;
             }
 
+            // 未表示の残り行を素早く追加（100ms間隔）
+            const allLines = fullContent.split('\n').filter(l => l.trim() !== '');
+            const remaining = allLines.slice(displayedLineCountRef.current);
+            remaining.forEach((line, i) => {
+                setTimeout(() => {
+                    setStreamingParagraphs(prev => [...prev, line]);
+                }, i * 100);
+            });
+
+            // 残り行のアニメーション完了後に結果カードへ遷移
+            const transitionDelay = remaining.length * 100 + 1400;
             setTimeout(() => {
-                document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth' });
-            }, 300);
+                setStreamingParagraphs([]);
+                setResults(parsePatterns(fullContent));
+                setTimeout(() => {
+                    document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth' });
+                }, 300);
+            }, transitionDelay);
+
         } catch (err) {
-            console.error('生成エラー:', err);
-        } finally {
+            if (dispatchTimerRef.current) { clearInterval(dispatchTimerRef.current); dispatchTimerRef.current = null; }
+            setShowOverlay(false);
+            setOverlayFadingOut(false);
             setIsGeneratingPatterns(false);
+            setStreamingParagraphs([]);
+            setGenerationError(err?.message || String(err));
         }
     };
+
+    useEffect(() => {
+        return () => {
+            if (dispatchTimerRef.current) clearInterval(dispatchTimerRef.current);
+        };
+    }, []);
 
     useEffect(() => {
         setSelectedTemplate(null);
@@ -288,55 +377,76 @@ export default function App() {
         <div style={{ display: 'flex', minHeight: '100vh', backgroundColor: '#FAFAF8' }}>
 
             {/* ローディングオーバーレイ */}
-            {isGeneratingPatterns && (
+            {showOverlay && (
                 <div style={{
                     position: 'fixed',
                     inset: 0,
                     zIndex: 100,
-                    backgroundColor: 'rgba(250, 250, 248, 0.98)',
+                    backgroundColor: '#FAFAF8',
                     display: 'flex',
                     flexDirection: 'column',
                     alignItems: 'center',
-                    justifyContent: 'center'
+                    justifyContent: 'center',
+                    opacity: overlayFadingOut ? 0 : 1,
+                    transition: 'opacity 0.8s ease-out',
+                    pointerEvents: overlayFadingOut ? 'none' : 'auto',
                 }}>
-                    <div className="animate-pulse-grow" style={{ position: 'relative', marginBottom: '40px' }}>
+                    {/* 女性イラスト + ローディングリング */}
+                    <div style={{ position: 'relative', marginBottom: '48px', width: '220px', height: '240px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        {/* 外側の回転リング */}
                         <div style={{
-                            width: '120px',
-                            height: '120px',
+                            position: 'absolute',
+                            width: '210px', height: '210px',
                             borderRadius: '50%',
-                            border: '1px solid #E0DED8',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            position: 'relative'
-                        }}>
-                            <div className="animate-breathe" style={{
-                                position: 'absolute',
-                                inset: '-12px',
-                                borderRadius: '50%',
-                                border: '2px solid #C5C3BD'
-                            }} />
-                            <div className="animate-breathe" style={{
-                                position: 'absolute',
-                                inset: '-24px',
-                                borderRadius: '50%',
-                                border: '1px solid #D8D6D0',
-                                animationDelay: '0.5s'
-                            }} />
-                            <Leaf className="animate-float" style={{ width: '36px', height: '36px', color: '#6B7C6B' }} />
-                        </div>
+                            border: '2px solid transparent',
+                            borderTopColor: '#E8A0B0',
+                            borderRightColor: '#E8A0B0',
+                            animation: 'spin 2.4s linear infinite',
+                        }} />
+                        {/* pulse リング */}
+                        <div className="animate-breathe" style={{
+                            position: 'absolute',
+                            width: '228px', height: '228px',
+                            borderRadius: '50%',
+                            border: '1px solid #F0D0D8',
+                        }} />
+                        {/* 逆回転リング */}
+                        <div style={{
+                            position: 'absolute',
+                            width: '192px', height: '192px',
+                            borderRadius: '50%',
+                            border: '1.5px solid transparent',
+                            borderBottomColor: '#D4A8B8',
+                            borderLeftColor: '#D4A8B8',
+                            animation: 'spin 1.8s linear infinite reverse',
+                        }} />
+
+                        {/* 画像（SVG線画：contain表示） */}
+                        <img
+                            src="/lording.svg"
+                            alt=""
+                            style={{
+                                width: '160px',
+                                height: '180px',
+                                objectFit: 'contain',
+                                objectPosition: 'center',
+                                position: 'relative',
+                                zIndex: 1,
+                            }}
+                        />
                     </div>
-                    <p className="animate-pulse" style={{
-                        fontSize: '22px',
-                        letterSpacing: '0.3em',
+
+                    <p style={{
+                        fontSize: '18px',
+                        letterSpacing: '0.35em',
                         color: '#5A5A5A',
-                        marginBottom: '12px',
-                        fontFamily: "'Noto Serif JP', serif"
+                        fontFamily: "'Noto Serif JP', serif",
+                        marginBottom: '10px',
                     }}>
-                        言葉を紡いでいます...
+                        愛を囁いています
                     </p>
-                    <p style={{ fontSize: '12px', color: '#9A9A9A', letterSpacing: '0.1em' }}>
-                        あなたの想いを形にしています
+                    <p style={{ fontSize: '12px', color: '#BBBBBB', letterSpacing: '0.15em' }}>
+                        少々お待ちください...
                     </p>
                 </div>
             )}
@@ -773,6 +883,51 @@ export default function App() {
                         </div>
                     </section>
 
+                    {/* エラー表示 */}
+                    {generationError && (
+                        <div style={{
+                            marginTop: '24px',
+                            padding: '16px 20px',
+                            backgroundColor: '#FFF0F0',
+                            border: '1px solid #FFCCCC',
+                            borderRadius: '8px',
+                            color: '#CC3333',
+                            fontSize: '13px',
+                            lineHeight: 1.6
+                        }}>
+                            <strong>生成エラー:</strong> {generationError}
+                        </div>
+                    )}
+
+                    {/* 段落スタッガードアニメーション表示 */}
+                    {streamingParagraphs.length > 0 && (
+                        <section id="streaming-section" style={{ paddingTop: '32px' }}>
+                            <div style={{
+                                backgroundColor: '#FFFFFF',
+                                borderRadius: '16px',
+                                border: '1px solid #E8E6E0',
+                                padding: '40px',
+                            }}>
+                                {streamingParagraphs.map((line, idx) => (
+                                    <p
+                                        key={idx}
+                                        style={{
+                                            fontFamily: "'Noto Serif JP', serif",
+                                            fontSize: '14px',
+                                            lineHeight: 1.9,
+                                            color: '#3A3A3A',
+                                            margin: '0 0 14px',
+                                            opacity: 0,
+                                            animation: 'fadeSlideUp 1.2s cubic-bezier(0.22, 1, 0.36, 1) forwards',
+                                        }}
+                                    >
+                                        {line}
+                                    </p>
+                                ))}
+                            </div>
+                        </section>
+                    )}
+
                     {/* 結果表示 */}
                     {results.length > 0 && (
                         <section id="results-section" style={{ paddingTop: '32px' }}>
@@ -789,7 +944,7 @@ export default function App() {
                                     RESULT
                                 </span>
                                 <h2 style={{ fontSize: '18px', fontWeight: 500, fontFamily: "'Noto Serif JP', serif" }}>
-                                    紡ぎ出された三つの言葉
+                                    生成された投稿パターン
                                 </h2>
                             </div>
 
@@ -797,13 +952,13 @@ export default function App() {
                                 {results.map((pattern, idx) => (
                                     <div
                                         key={idx}
-                                        className="animate-fade-in"
+                                        className="animate-fade-slide-down"
                                         style={{
                                             backgroundColor: '#FFFFFF',
                                             borderRadius: '16px',
                                             border: '1px solid #E8E6E0',
                                             padding: '32px',
-                                            animationDelay: `${idx * 0.1}s`
+                                            animationDelay: `${idx * 0.8}s`
                                         }}
                                     >
                                         {/* APPROACH ラベル */}

@@ -70,3 +70,84 @@ ON CONFLICT (method_id, template_id) DO UPDATE SET
 -- 確認クエリ
 -- ============================================
 -- SELECT * FROM writing_config;
+
+-- ============================================
+-- 2. writing_styles テーブル作成
+-- ============================================
+CREATE TABLE IF NOT EXISTS writing_styles (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  slug TEXT UNIQUE NOT NULL,
+  title TEXT,
+  system_prompt TEXT,
+  content_type TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE writing_styles ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Anyone can read writing_styles" ON writing_styles
+  FOR SELECT USING (true);
+
+CREATE INDEX IF NOT EXISTS idx_writing_styles_slug ON writing_styles(slug);
+CREATE INDEX IF NOT EXISTS idx_writing_styles_content_type ON writing_styles(content_type);
+
+CREATE TRIGGER update_writing_styles_updated_at
+  BEFORE UPDATE ON writing_styles
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================
+-- 3. reference_diaries テーブル作成
+-- ============================================
+CREATE TABLE IF NOT EXISTS reference_diaries (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  style_id UUID REFERENCES writing_styles(id),
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE reference_diaries ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Anyone can read reference_diaries" ON reference_diaries
+  FOR SELECT USING (true);
+
+CREATE INDEX IF NOT EXISTS idx_reference_diaries_content_type ON reference_diaries(content_type);
+CREATE INDEX IF NOT EXISTS idx_reference_diaries_style_id ON reference_diaries(style_id);
+
+CREATE TRIGGER update_reference_diaries_updated_at
+  BEFORE UPDATE ON reference_diaries
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================
+-- 4. knowledge_chunks テーブル作成
+-- ============================================
+CREATE TABLE IF NOT EXISTS knowledge_chunks (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  style_id UUID REFERENCES writing_styles(id),
+  category TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE knowledge_chunks ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Anyone can read knowledge_chunks" ON knowledge_chunks
+  FOR SELECT USING (true);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_category ON knowledge_chunks(category);
+CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_style_id ON knowledge_chunks(style_id);
+
+CREATE TRIGGER update_knowledge_chunks_updated_at
+  BEFORE UPDATE ON knowledge_chunks
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================
+-- 確認クエリ
+-- ============================================
+-- SELECT * FROM writing_styles;
+-- SELECT * FROM reference_diaries;
+-- SELECT * FROM knowledge_chunks;

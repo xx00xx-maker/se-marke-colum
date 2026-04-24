@@ -31,3 +31,10 @@ Thumbs.db
 # Cache
 .cache/
 .parcel-cache/
+
+# MCP / local tools (contains access tokens)
+.mcp.json
+.playwright-mcp/
+
+# Supabase temp
+supabase/.temp/

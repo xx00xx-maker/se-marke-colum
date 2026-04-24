@@ -172,34 +172,79 @@ export async function fetchAllKeywordsByCategory() {
 }
 
 /**
- * 新しいEdge Function generate-content を呼び出し
+ * Edge Function をストリーミングで呼び出し
+ * onChunk(accumulated) が各チャンク到着時に呼ばれる
+ * 戻り値は完全なテキスト
  */
-export async function generateContent({
+export async function generateContentStreaming({
     styleSlug = 'pana_emotion',
     contentType = 'board_template',
     conceptId = null,
     selectedKeywords = [],
-    userPrompt = ''
+    userPrompt = '',
+    onChunk,
 }) {
     if (isDemoMode) {
-        // デモモードではモックデータを返す（少し遅延を入れてローディングを見せる）
-        await new Promise(resolve => setTimeout(resolve, 2000))
-        return {
-            success: true,
-            content: DEMO_PATTERNS[0].content,
-            model: 'demo-mode',
-            appliedTip: 'なし'
-        }
+        const demoContent = [
+            '---パターン1---',
+            'タイトル: デモ: 共感・自己開示型',
+            '',
+            '私も長年、同じ悩みを抱えていました。',
+            '',
+            'あなたは今、このような状況ではありませんか？',
+            '毎日が単調で、もっと深い繋がりを求めている…',
+            '',
+            '私が学んだのは、小さな変化が大きな違いを生むということです。',
+        ].join('\n')
+
+        let i = 0
+        let acc = ''
+        await new Promise(resolve => {
+            const interval = setInterval(() => {
+                if (i < demoContent.length) {
+                    acc += demoContent[i++]
+                    onChunk(acc)
+                } else {
+                    clearInterval(interval)
+                    resolve()
+                }
+            }, 15)
+        })
+        return demoContent
     }
 
-    const { data, error } = await supabase.functions.invoke('super-processor', {
-        body: { styleSlug, contentType, conceptId, selectedKeywords, userPrompt }
+    const response = await fetch(`${supabaseUrl}/functions/v1/super-processor`, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${supabaseAnonKey}`,
+            'Content-Type': 'application/json',
+            'apikey': supabaseAnonKey,
+        },
+        body: JSON.stringify({ styleSlug, contentType, conceptId, selectedKeywords, userPrompt }),
     })
 
-    if (error) {
-        throw new Error(error.message || 'コンテンツ生成に失敗しました')
+    if (!response.ok) {
+        const errorText = await response.text()
+        let msg = errorText
+        try {
+            const parsed = JSON.parse(errorText)
+            msg = parsed.error || errorText
+        } catch (_) {}
+        throw new Error(msg || 'コンテンツ生成に失敗しました')
     }
 
-    return data
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let fullContent = ''
+
+    while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        const text = decoder.decode(value, { stream: true })
+        fullContent += text
+        onChunk(fullContent)
+    }
+
+    return fullContent
 }
 
