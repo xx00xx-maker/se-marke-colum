@@ -238,7 +238,7 @@ export default function App() {
     };
 
     // コンテンツ生成
-    const MIN_OVERLAY_MS = 10000;
+    const MIN_OVERLAY_MS = 7000;
 
     const generateContentHandler = async () => {
         if (selectedItems.length === 0 || !selectedTemplate) return;
